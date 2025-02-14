@@ -54,7 +54,7 @@ async fn handle_chat_completions(
 ) -> Response {
     // Extract request details
     let (parts, body) = req.into_parts();
-    let body_bytes = match hyper::body::to_bytes(body).await {
+    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return create_error_response(
