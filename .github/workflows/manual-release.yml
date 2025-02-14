@@ -1,1 +1,67 @@
+name: Build OpenAI API Proxy
 
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools pkg-config
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: x86_64-unknown-linux-musl
+        override: true
+
+    - name: Build Release
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: true
+        command: build
+        args: --release --target x86_64-unknown-linux-musl
+
+    - name: Strip binary
+      run: strip target/x86_64-unknown-linux-musl/release/openai-api-proxy
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.event.inputs.version }}
+        release_name: OpenAI API Proxy v${{ github.event.inputs.version }}
+        draft: false
+        prerelease: false
+        body: |
+          OpenAI API compatible proxy server
+          
+          - Static linked with OpenSSL
+          - No system dependencies required
+          - Built with Rust ${{ runner.os }}
+
+    - name: Upload Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./target/x86_64-unknown-linux-musl/release/openai-api-proxy
+        asset_name: openai-api-proxy-${{ github.event.inputs.version }}-linux-x86_64
+        asset_content_type: application/octet-stream
