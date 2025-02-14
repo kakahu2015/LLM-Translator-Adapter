@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,  // 明确导入 State
+    extract::State,
     routing::{post, get},
     Router,
     response::Response,
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 // App state containing HTTP client
-#[derive(Clone)]  // 添加 Clone trait
+#[derive(Clone)]
 struct AppState {
     client: Client,
 }
@@ -33,7 +33,7 @@ async fn main() {
 
     // Create router
     let app = Router::new()
-         .route("/v1beta/openai/chat/completions", post(handle_chat_completions)) 
+        .route("/v1beta/openai/chat/completions", post(handle_chat_completions))
         .route("/health", get(health_check))
         .with_state(state);
 
@@ -73,12 +73,12 @@ async fn handle_chat_completions(
         Err(_) => false,
     };
 
-    // Forward request to actual LLM service
-    let target_url = get_target_url(&headers);
+    // Forward request to Google API
+    let target_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
     let reqwest_headers = convert_headers(&headers);
     
     let response = match state.client
-        .post(&target_url)
+        .post(target_url)
         .headers(reqwest_headers)
         .body(body)
         .send()
@@ -148,7 +148,7 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     // Copy other relevant headers
     if let Some(headers) = builder.headers_mut() {
         for (key, value) in response.headers() {
-            if key.as_str() != http::header::CONTENT_TYPE.as_str() {  // 使用 as_str() 比较
+            if key.as_str() != http::header::CONTENT_TYPE.as_str() {
                 if let Ok(name) = HeaderName::from_str(key.as_str()) {
                     if let Ok(val) = HeaderValue::from_bytes(value.as_bytes()) {
                         headers.insert(name, val);
@@ -188,11 +188,4 @@ fn create_error_response(status: StatusCode, message: &str, details: &str) -> Re
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&error_json).unwrap()))
         .unwrap()
-}
-
-// Helper function to get target URL from headers
-fn get_target_url(_headers: &HeaderMap) -> String {
-    // You can implement custom logic here to extract the target URL
-    // For now, we'll use a default
-    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string()
 }
