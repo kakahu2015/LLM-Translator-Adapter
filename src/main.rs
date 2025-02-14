@@ -194,5 +194,5 @@ fn create_error_response(status: StatusCode, message: &str, details: &str) -> Re
 fn get_target_url(_headers: &HeaderMap) -> String {
     // You can implement custom logic here to extract the target URL
     // For now, we'll use a default
-    "http://your-internal-llm-service/chat/completions".to_string()
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string()
 }
