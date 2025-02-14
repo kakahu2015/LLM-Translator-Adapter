@@ -33,7 +33,7 @@ async fn main() {
 
     // Create router
     let app = Router::new()
-        .route("/chat/completions", post(handle_chat_completions))
+         .route("/v1beta/openai/chat/completions", post(handle_chat_completions)) 
         .route("/health", get(health_check))
         .with_state(state);
 
