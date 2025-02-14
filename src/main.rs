@@ -1,4 +1,5 @@
 use axum::{
+    extract::State,  // 明确导入 State
     routing::{post, get},
     Router,
     response::Response,
@@ -13,6 +14,7 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 // App state containing HTTP client
+#[derive(Clone)]  // 添加 Clone trait
 struct AppState {
     client: Client,
 }
@@ -146,7 +148,7 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     // Copy other relevant headers
     if let Some(headers) = builder.headers_mut() {
         for (key, value) in response.headers() {
-            if key != http::header::CONTENT_TYPE {
+            if key.as_str() != http::header::CONTENT_TYPE.as_str() {  // 使用 as_str() 比较
                 if let Ok(name) = HeaderName::from_str(key.as_str()) {
                     if let Ok(val) = HeaderValue::from_bytes(value.as_bytes()) {
                         headers.insert(name, val);
