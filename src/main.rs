@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tracing::{info, error};
+use futures::stream::StreamExt;
 
 #[derive(Debug, Deserialize, Clone)]
 struct AppConfig {
@@ -66,6 +67,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn create_error_response(
+    status: StatusCode,
+    error_type: &str,
+    message: &str,
+) -> Response<Body> {
+    let error_response = serde_json::json!({
+        "error": {
+            "type": error_type,
+            "message": message,
+        }
+    });
+
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&error_response).unwrap()))
+        .unwrap()
+}
+
+async fn handle_streaming_response(response: reqwest::Response) -> Response<Body> {
+    let status = response.status();
+    let headers = response.headers().clone();
+    
+    let stream = response.bytes_stream().map(|result| {
+        match result {
+            Ok(bytes) => Ok(bytes.to_vec()),
+            Err(e) => {
+                error!("Error reading stream: {}", e);
+                Err(std::io::Error::new(std::io::ErrorKind::Other, e))
+            }
+        }
+    });
+
+    let body = Body::from_stream(stream);
+    
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive");
+
+    // Copy relevant headers from the original response
+    for (key, value) in headers.iter() {
+        if !["transfer-encoding", "connection"].contains(&key.as_str()) {
+            builder = builder.header(key, value);
+        }
+    }
+
+    builder.body(body).unwrap()
+}
+
+async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            error!("Failed to read response body: {}", e);
+            return create_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to read response",
+                &e.to_string(),
+            );
+        }
+    };
+
+    let mut builder = Response::builder().status(status);
+
+    // Copy relevant headers from the original response
+    for (key, value) in headers.iter() {
+        if !["transfer-encoding", "connection"].contains(&key.as_str()) {
+            builder = builder.header(key, value);
+        }
+    }
+
+    builder.body(Body::from(bytes)).unwrap()
 }
 
 async fn handle_chat(
