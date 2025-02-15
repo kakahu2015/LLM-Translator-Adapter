@@ -3,7 +3,7 @@ use axum::{
     routing::post,
     Router,
     response::Response,
-    http::{StatusCode, header},
+    http::{self, StatusCode, header},
     body::{Body, Bytes},
 };
 use config::{Config, ConfigError};
@@ -13,8 +13,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use serde_json::Value;
 use tokio::net::TcpListener;
-use tracing::{info, error};
-use futures::stream::StreamExt;
+use tracing_subscriber;
 
 #[derive(Debug, Deserialize, Clone)]
 struct AppConfig {
@@ -46,10 +45,10 @@ struct AppState {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 初始化日志
     tracing_subscriber::fmt::init();
-
+    
     // 加载配置
     let config = Arc::new(AppConfig::load()?);
-    info!("Configuration loaded successfully");
+    println!("Configuration loaded successfully");
     
     let client = Client::new();
     let state = Arc::new(AppState { 
@@ -63,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await?;
-    info!("Server running on http://{}", addr);
+    println!("Server running on http://{}", addr);
     
     axum::serve(listener, app).await?;
     Ok(())
@@ -96,7 +95,7 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
         match result {
             Ok(bytes) => Ok(bytes.to_vec()),
             Err(e) => {
-                error!("Error reading stream: {}", e);
+                println!("Error reading stream: {}", e);
                 Err(std::io::Error::new(std::io::ErrorKind::Other, e))
             }
         }
@@ -105,7 +104,7 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     let body = Body::from_stream(stream);
     
     let mut builder = Response::builder()
-        .status(status)
+        .status(StatusCode::from_u16(status.as_u16()).unwrap())
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive");
@@ -113,7 +112,10 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
-            builder = builder.header(key, value);
+            builder = builder.header(
+                http::HeaderName::from_bytes(key.as_ref()).unwrap(),
+                http::HeaderValue::from_bytes(value.as_bytes()).unwrap()
+            );
         }
     }
 
@@ -126,7 +128,7 @@ async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
     let bytes = match response.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            error!("Failed to read response body: {}", e);
+            println!("Failed to read response body: {}", e);
             return create_error_response(
                 StatusCode::BAD_GATEWAY,
                 "Failed to read response",
@@ -135,12 +137,16 @@ async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
         }
     };
 
-    let mut builder = Response::builder().status(status);
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(status.as_u16()).unwrap());
 
     // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
-            builder = builder.header(key, value);
+            builder = builder.header(
+                http::HeaderName::from_bytes(key.as_ref()).unwrap(),
+                http::HeaderValue::from_bytes(value.as_bytes()).unwrap()
+            );
         }
     }
 
@@ -155,7 +161,7 @@ async fn handle_chat(
     let mut payload: Value = match serde_json::from_slice(&body) {
         Ok(json) => json,
         Err(e) => {
-            error!("Failed to parse request body: {}", e);
+            println!("Failed to parse request body: {}", e);
             return create_error_response(
                 StatusCode::BAD_REQUEST,
                 "Invalid request body",
@@ -177,20 +183,22 @@ async fn handle_chat(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", state.config.model_key))
-            .map_err(|e| {
-                error!("Failed to create authorization header: {}", e);
-                create_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Invalid configuration",
-                    "Failed to create authorization header",
-                )
-            })?,
-    );
+    
+    // 处理授权头
+    let auth_header = match reqwest::header::HeaderValue::from_str(&format!("Bearer {}", state.config.model_key)) {
+        Ok(header) => header,
+        Err(e) => {
+            println!("Failed to create authorization header: {}", e);
+            return create_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Invalid configuration",
+                "Failed to create authorization header",
+            );
+        }
+    };
+    headers.insert(reqwest::header::AUTHORIZATION, auth_header);
 
-    info!("Forwarding request to model API");
+    println!("Forwarding request to model API");
     
     // 转发请求
     let response = match state.client
@@ -201,7 +209,7 @@ async fn handle_chat(
         .await {
             Ok(resp) => resp,
             Err(e) => {
-                error!("Failed to forward request: {}", e);
+                println!("Failed to forward request: {}", e);
                 return create_error_response(
                     StatusCode::BAD_GATEWAY,
                     "Failed to forward request",
