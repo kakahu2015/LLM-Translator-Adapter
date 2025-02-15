@@ -11,7 +11,6 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
-use serde_json::Value;
 use tokio::net::TcpListener;
 use tracing_subscriber;
 
@@ -43,10 +42,8 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化日志
     tracing_subscriber::fmt::init();
     
-    // 加载配置
     let config = Arc::new(AppConfig::load()?);
     println!("Configuration loaded successfully");
     
@@ -104,12 +101,11 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     let body = Body::from_stream(stream);
     
     let mut builder = Response::builder()
-        .status(StatusCode::from_u16(status.as_u16()).unwrap())
+        .status(status)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive");
 
-    // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
             if let (Ok(name), Ok(val)) = (
@@ -140,9 +136,8 @@ async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
     };
 
     let mut builder = Response::builder()
-        .status(StatusCode::from_u16(status.as_u16()).unwrap());
+        .status(status);
 
-    // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
             if let (Ok(name), Ok(val)) = (
@@ -162,59 +157,16 @@ async fn handle_chat(
     headers: http::HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    // 解析请求体
-    let mut payload: Value = match serde_json::from_slice(&body) {
-        Ok(json) => json,
-        Err(e) => {
-            println!("Failed to parse request body: {}", e);
-            return create_error_response(
-                StatusCode::BAD_REQUEST,
-                "Invalid request body",
-                "Could not parse request body as JSON",
-            );
-        }
-    };
-
-    // 从请求头获取 Authorization
-    let auth_header = match headers.get(http::header::AUTHORIZATION) {
-        Some(value) => {
-            match reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
-                Ok(v) => v,
-                Err(_) => {
-                    return create_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "Invalid authorization",
-                        "Authorization header value is invalid",
-                    );
-                }
-            }
-        },
-        None => {
-            return create_error_response(
-                StatusCode::UNAUTHORIZED,
-                "Missing authorization",
-                "Authorization header is required",
-            );
-        }
-    };
-
-    // 设置请求头
-    let mut forward_headers = reqwest::header::HeaderMap::new();
+    let mut forward_headers = headers;
     forward_headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
+        http::header::AUTHORIZATION,
+        format!("Bearer {}", state.config.model_key).parse().unwrap()
     );
-    forward_headers.insert(reqwest::header::AUTHORIZATION, auth_header);
 
-    let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-
-    println!("Forwarding request to model API");
-    
-    // 转发请求
     let response = match state.client
         .post(&state.config.model_url)
         .headers(forward_headers)
-        .json(&payload)
+        .body(body)
         .send()
         .await {
             Ok(resp) => resp,
@@ -228,7 +180,12 @@ async fn handle_chat(
             }
         };
 
-    // 处理响应
+    let is_stream = response.headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/event-stream"))
+        .unwrap_or(false);
+
     if is_stream {
         handle_streaming_response(response).await
     } else {
