@@ -84,27 +84,23 @@ fn create_error_response(
         .unwrap()
 }
 
-async fn handle_streaming_response(response: reqwest::Response) -> Response<Body> {
-    let status = response.status();
+async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
+    let status = StatusCode::from_u16(response.status().as_u16()).unwrap();
     let headers = response.headers().clone();
-    
-    let stream = response.bytes_stream().map(|result| {
-        match result {
-            Ok(bytes) => Ok(bytes.to_vec()),
-            Err(e) => {
-                println!("Error reading stream: {}", e);
-                Err(std::io::Error::new(std::io::ErrorKind::Other, e))
-            }
+    let bytes = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            println!("Failed to read response body: {}", e);
+            return create_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to read response",
+                &e.to_string(),
+            );
         }
-    });
+    };
 
-    let body = Body::from_stream(stream);
-    
     let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive");
+        .status(status);
 
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
@@ -117,7 +113,7 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
         }
     }
 
-    builder.body(body).unwrap()
+    builder.body(Body::from(bytes)).unwrap()
 }
 
 async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
@@ -157,9 +153,16 @@ async fn handle_chat(
     headers: http::HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    let mut forward_headers = headers;
+    // 将 axum headers 转换为 reqwest headers
+    let mut forward_headers = reqwest::header::HeaderMap::new();
+    for (key, value) in headers.iter() {
+        if let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+            forward_headers.insert(reqwest::header::HeaderName::from_bytes(key.as_ref()).unwrap(), v);
+        }
+    }
+
     forward_headers.insert(
-        http::header::AUTHORIZATION,
+        reqwest::header::AUTHORIZATION,
         format!("Bearer {}", state.config.model_key).parse().unwrap()
     );
 
@@ -181,7 +184,7 @@ async fn handle_chat(
         };
 
     let is_stream = response.headers()
-        .get(http::header::CONTENT_TYPE)
+        .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|v| v.contains("text/event-stream"))
         .unwrap_or(false);
