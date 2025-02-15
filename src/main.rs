@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let app = Router::new()
-        .route("/v1/chat/completions", post(handle_chat))
+        .route("/v1beta/openai/chat/completions", post(handle_chat))
         .with_state(state);
 
     let addr = format!("{}:{}", config.host, config.port);
@@ -155,6 +155,7 @@ async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
 
 async fn handle_chat(
     State(state): State<Arc<AppState>>,
+    headers: http::HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
     // 解析请求体
@@ -170,40 +171,34 @@ async fn handle_chat(
         }
     };
 
-    // 替换模型名称
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("model".to_string(), Value::String(state.config.default_model.clone()));
-    }
-
-    let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-
-    // 设置请求头
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-    
-    // 处理授权头
-    let auth_header = match reqwest::header::HeaderValue::from_str(&format!("Bearer {}", state.config.model_key)) {
-        Ok(header) => header,
-        Err(e) => {
-            println!("Failed to create authorization header: {}", e);
+    // 从请求头获取 Authorization
+    let auth_header = match headers.get(http::header::AUTHORIZATION) {
+        Some(value) => value.clone(),
+        None => {
             return create_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Invalid configuration",
-                "Failed to create authorization header",
+                StatusCode::UNAUTHORIZED,
+                "Missing authorization",
+                "Authorization header is required",
             );
         }
     };
-    headers.insert(reqwest::header::AUTHORIZATION, auth_header);
+
+    // 设置请求头
+    let mut forward_headers = reqwest::header::HeaderMap::new();
+    forward_headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    forward_headers.insert(reqwest::header::AUTHORIZATION, auth_header);
+
+    let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     println!("Forwarding request to model API");
     
     // 转发请求
     let response = match state.client
         .post(&state.config.model_url)
-        .headers(headers)
+        .headers(forward_headers)
         .json(&payload)
         .send()
         .await {
