@@ -112,10 +112,12 @@ async fn handle_streaming_response(response: reqwest::Response) -> Response<Body
     // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
-            builder = builder.header(
-                http::HeaderName::from_bytes(key.as_ref()).unwrap(),
-                http::HeaderValue::from_bytes(value.as_bytes()).unwrap()
-            );
+            if let (Ok(name), Ok(val)) = (
+                http::HeaderName::from_bytes(key.as_ref()),
+                http::HeaderValue::from_bytes(value.as_bytes())
+            ) {
+                builder = builder.header(name, val);
+            }
         }
     }
 
@@ -143,10 +145,12 @@ async fn handle_normal_response(response: reqwest::Response) -> Response<Body> {
     // Copy relevant headers from the original response
     for (key, value) in headers.iter() {
         if !["transfer-encoding", "connection"].contains(&key.as_str()) {
-            builder = builder.header(
-                http::HeaderName::from_bytes(key.as_ref()).unwrap(),
-                http::HeaderValue::from_bytes(value.as_bytes()).unwrap()
-            );
+            if let (Ok(name), Ok(val)) = (
+                http::HeaderName::from_bytes(key.as_ref()),
+                http::HeaderValue::from_bytes(value.as_bytes())
+            ) {
+                builder = builder.header(name, val);
+            }
         }
     }
 
@@ -173,7 +177,18 @@ async fn handle_chat(
 
     // 从请求头获取 Authorization
     let auth_header = match headers.get(http::header::AUTHORIZATION) {
-        Some(value) => value.clone(),
+        Some(value) => {
+            match reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+                Ok(v) => v,
+                Err(_) => {
+                    return create_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid authorization",
+                        "Authorization header value is invalid",
+                    );
+                }
+            }
+        },
         None => {
             return create_error_response(
                 StatusCode::UNAUTHORIZED,
