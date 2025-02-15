@@ -19,6 +19,7 @@ env_logger = "0.10"
 log = "0.4"
 toml = "0.8"
 config = "0.13"
+tracing-subscriber = "0.3"
 
 
 [profile.release]
